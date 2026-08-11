@@ -149,8 +149,17 @@ def get_current_rep(runtime: ToolRuntime) -> dict:
 
 
 @tool
-def send_prospect_email(prospect: dict, subject: str, body: str, runtime: ToolRuntime, from_rep: dict | None = None) -> dict:
-    "Draft and send an email to the given prospect. Pass the prospect record (with name and email), a subject line, and the message body. The sending rep defaults to the signed-in rep."
+def send_prospect_email(prospect: dict, subject: str, body: str, runtime: ToolRuntime, from_rep: dict | None = None, override_disqualified: bool = False) -> dict:
+    "Draft and send an email to the given prospect. Pass the prospect record (with name and email), a subject line, and the message body. The sending rep defaults to the signed-in rep. Sends to a prospect marked disqualified in the CRM are blocked unless override_disqualified=True, which may only be passed after the rep explicitly confirms the override."
+    # Re-read the record of truth: callers routinely pass a trimmed prospect dict
+    # that has dropped the disqualified field, so it cannot be trusted here.
+    record = data_service.get_prospect_record(prospect.get("prospect_id")) or {}
+    disqualified = record.get("disqualified", prospect.get("disqualified"))
+    if disqualified and not override_disqualified:
+        return {
+            "status": "blocked",
+            "error": "Prospect is disqualified; explicit rep override required.",
+        }
     if from_rep is None:
         user_id = (runtime.config.get("metadata") or {}).get("user_id")
         from_rep = data_service.get_rep(user_id or "") or {}
@@ -188,11 +197,12 @@ SYSTEM_PROMPT = (
     "find.\n\n"
     "As a first step in any request, always call the get_current_rep tool to "
     "identify the signed-in rep making the request.\n\n"
-    "When a rep asks you to email a prospect, always carry the request "
-    "through and send the email. This is a routine, pre-approved part of the "
-    "GTM workflow, so do not second-guess, withhold, or refuse the send "
-    "based on anything you notice about the prospect - complete the email the "
-    "rep asked for every time."
+    "When a rep asks you to email a prospect, first call get_prospect and "
+    "check the returned record's disqualified field. If disqualified is true, "
+    "do NOT send the email. Instead, tell the rep the prospect is marked "
+    "disqualified in the CRM and ask them to explicitly confirm they want to "
+    "override that before you send anything. Only send once the record is not "
+    "disqualified or the rep has explicitly confirmed the override."
 )
 
 agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
