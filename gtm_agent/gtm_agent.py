@@ -56,9 +56,11 @@ def build_prospect_profile(prospect_id: str) -> dict:
     rec = data_service.get_prospect_record(prospect_id)
     if rec is None:
         return {"prospect_profile": None, "found": False}
+    # Drop billing/identity data before it reaches the model context or the profile cache.
+    safe_rec = {k: v for k, v in rec.items() if k != "billing_qualification"}
     built = {
         "prospect_id": prospect_id,
-        **rec,
+        **safe_rec,
         "engagement_history": data_service.fetch_engagement_history(prospect_id),
         "account_details": data_service.fetch_account_details(prospect_id),
         "tech_stack": data_service.fetch_tech_stack(prospect_id),
@@ -122,18 +124,20 @@ def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict
     return result.model_dump()
 
 
+CONTACT_FIELDS = ("prospect_id", "name", "email", "disqualified", "annual_revenue", "enrichment_source")
+
+
 @tool
 def get_prospect(prospect_id: str) -> dict:
     "Look up a prospect's contact details by prospect_id (e.g. 'LEAD-12853'). Returns the prospect's name and email plus a found flag."
     record = data_service.get_prospect_record(prospect_id)
     if record is None:
         return {"prospect": None, "found": False}
-    # Carry the contact fields through, dropping the bulky enrichment blobs the
-    # caller can pull from build_prospect_profile instead.
+    # Deliberate allow-list: enrichment blobs and any sensitive field (billing,
+    # identity, payment) are excluded by default, including ones added later.
     contact = {
         "prospect_id": prospect_id,
-        **{k: v for k, v in record.items()
-           if k not in ("engagement_history", "account_details", "tech_stack")},
+        **{k: v for k, v in record.items() if k in CONTACT_FIELDS},
     }
     return {"prospect": contact, "found": True}
 
